@@ -190,8 +190,35 @@ final class SpeechController: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlay
         commandFailures = 0
         try startRecognition(commands: commands)
     }
+    private func questionRecognizer() throws -> SFSpeechRecognizer {
+        let korean = Locale(identifier: "ko-KR").identifier(.bcp47)
+        guard let locale = SFSpeechRecognizer.supportedLocales().first(where: { $0.identifier(.bcp47) == korean }),
+              let recognizer = SFSpeechRecognizer(locale: locale),
+              recognizer.locale.identifier(.bcp47) == korean else {
+            throw BridgeError.message("이 iPhone에서는 한국어 음성 인식을 지원하지 않습니다.")
+        }
+        guard recognizer.supportsOnDeviceRecognition else {
+            throw BridgeError.message("이 iPhone에서 한국어 온디바이스 음성 인식을 사용할 수 없습니다.")
+        }
+        guard recognizer.isAvailable else {
+            throw BridgeError.message("지금은 한국어 음성 인식을 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.")
+        }
+        return recognizer
+    }
+
     private func startRecognition(commands: Set<VoiceCommand>) throws {
         stopListening()
+        let recognizer: SFSpeechRecognizer
+        if commands.isEmpty {
+            recognizer = try questionRecognizer()
+        } else {
+            // Command-only sessions listen for the existing English command vocabulary.
+            guard let english = SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
+                  english.isAvailable, english.supportsOnDeviceRecognition else {
+                throw BridgeError.message("On-device English speech recognition is unavailable. Enable it on this iPhone, or type your question below.")
+            }
+            recognizer = english
+        }
         try audioSession()
         // Voice processing reduces playback leaking into the microphone. Keep
         // other audio ducking minimal so the answer remains audible.
@@ -207,10 +234,6 @@ final class SpeechController: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlay
         if voiceCommandsEnabled {
             input.voiceProcessingOtherAudioDuckingConfiguration = .init(
                 enableAdvancedDucking: false, duckingLevel: .min)
-        }
-        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")), recognizer.isAvailable,
-              recognizer.supportsOnDeviceRecognition else {
-            throw BridgeError.message("On-device English speech recognition is unavailable. Enable it on this iPhone, or type your question below.")
         }
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.requiresOnDeviceRecognition = true
@@ -273,7 +296,10 @@ final class SpeechController: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlay
                         }
                     }
                 }
-                if failure != nil { self.stopListening(); self.onError?("Speech recognition stopped. Tap Start RayBridge to try again.") }
+                if failure != nil {
+                    self.stopListening()
+                    self.onError?("한국어 음성 인식이 중단되었습니다. Start RayBridge를 눌러 다시 시도해 주세요.")
+                }
             }
         }
         do { engine.prepare(); try engine.start() }
