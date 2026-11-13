@@ -34,7 +34,10 @@ struct ContentView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     Text("Your world, in words.").font(.largeTitle.bold())
-                    Text(model.status).font(.title3).accessibilityLabel("Assistant status: \(model.status)")
+                    Text(model.status).font(.title3).accessibilityLabel("현재 상태: \(model.status)")
+                    if !model.speechVoices.contains(where: { $0.isKorean }) {
+                        Text(SystemAnnouncement.missingVoice).font(.footnote)
+                    }
                     Button {
                         if model.sessionActive { model.stopFromButton() } else { model.startFromButton() }
                     } label: {
@@ -44,7 +47,7 @@ struct ContentView: View {
                         .disabled(model.sessionPhase == .stopping)
                         .accessibilityHint(model.sessionActive ? "Stops the camera, microphone, speech, and Mac connection." : "Connects to your Mac and the glasses camera, or offers this iPhone when the glasses aren’t connected, then starts listening for your question.")
                     if let error = model.error { Text(error).foregroundStyle(.red).accessibilityLabel("Error: \(error)") }
-                    Text(model.cameraStatus).accessibilityLabel("Camera status: \(model.cameraStatus)")
+                    Text(model.cameraStatus).accessibilityLabel("카메라 상태: \(model.cameraStatus)")
                     Text("Tap Start RayBridge or ask Siri to start RayBridge, wait for the camera confirmation, then ask your question. Stop RayBridge ends the entire session. If your glasses aren’t connected, RayBridge offers to continue with this iPhone’s camera and speaker.").font(.body)
                     GroupBox("Conversation") {
                         VStack(alignment: .leading, spacing: 12) {
@@ -210,16 +213,21 @@ struct SetupView: View {
                     .disabled(model.sessionActive)
                     .accessibilityHint("Selects whether assistant answers use Apple speech on this iPhone or the local Kokoro model on your Mac.")
                     if model.answerVoiceEngine == .apple {
-                        Picker("Apple voice", selection: $model.speechVoiceIdentifier) {
+                        Picker("Apple voice", selection: Binding(get: { model.speechVoiceChoice }, set: model.selectSpeechVoice)) {
+                            if let automatic = model.speechVoices.first {
+                                Text("Automatic (\(automatic.name), \(automatic.languageName))").tag("")
+                            }
                             ForEach(model.speechVoices) { voice in
                                 Text(voice.displayName).tag(voice.id)
                             }
                         }
                         .disabled(model.sessionActive || model.speechVoices.isEmpty)
                         Button("Preview selected voice") { model.previewSpeechVoice() }
-                            .disabled(model.sessionActive || model.speechVoiceIdentifier.isEmpty)
+                            .disabled(model.sessionActive || model.selectedSpeechVoice == nil)
                             .accessibilityHint("Plays a short sample through connected glasses, or through the iPhone when glasses audio is unavailable.")
-                        Text("Premium and enhanced U.S. English voices appear first when installed. Additional voices are managed in iPhone Accessibility settings. Reopen Setup after downloading a voice.")
+                        if !model.speechVoices.contains(where: { $0.isKorean }) {
+                            Text("한국어 음성이 없습니다. iPhone 설정 → 손쉬운 사용 → 콘텐츠 말하기(또는 읽기 및 말하기) → 음성에서 한국어 음성을 다운로드한 뒤 Setup을 다시 열어 주세요.")
+                        }
                     } else {
                         Picker("Kokoro voice", selection: $model.kokoroVoiceIdentifier) {
                             ForEach(model.kokoroVoices) { voice in

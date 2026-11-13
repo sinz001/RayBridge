@@ -174,6 +174,7 @@ export class PhoneSession {
   }
   async coordinatorControl(device, operation) {
     const action = this.actionBroker.request(this.sessionId, this.connectionEpoch, device, operation);
+    let kind = 'status';
     const receipt = await this.actionBroker.execute(action, {
       sessionId: this.sessionId, connectionEpoch: this.connectionEpoch, task: null
     }, () => {
@@ -183,9 +184,10 @@ export class PhoneSession {
         if (this.active) return this.pendingProgress || this.meaningfulProgress || 'The assistant is working on your question.';
         return 'No task is running. RayBridge is listening.';
       }
+      kind = this.lastAnswer ? 'repeatAnswer' : 'status';
       return this.lastAnswer || 'There is no completed answer to repeat yet.';
     });
-    if (!this.closed) this.send({ type: 'coordinator.speech', text: receipt.result });
+    if (!this.closed) this.send({ type: 'coordinator.speech', kind, text: receipt.result });
   }
   // Partial text is only useful to a phone that speaks it locally. Kokoro
   // generates one audio file on the Mac from the finished answer.
@@ -213,7 +215,7 @@ export class PhoneSession {
     this.stopProgressUpdates();
     this.latestProgress = 'Got it. I’ll start now and keep you updated.';
     this.pendingProgress = null; this.meaningfulProgress = null;
-    this.send({ type: 'coordinator.speech', text: this.latestProgress });
+    this.send({ type: 'coordinator.speech', kind: 'progress', text: this.latestProgress });
     this.scheduleNextProgressUpdate();
   }
   queueProgressUpdate(text) {
@@ -228,7 +230,7 @@ export class PhoneSession {
       if (this.pendingProgress) this.meaningfulProgress = this.pendingProgress;
       this.latestProgress = this.pendingProgress || 'I’m still working on your request.';
       this.pendingProgress = null;
-      this.send({ type: 'coordinator.speech', text: this.latestProgress });
+      this.send({ type: 'coordinator.speech', kind: 'progress', text: this.latestProgress });
       this.scheduleNextProgressUpdate();
     }, this.progressInterval);
     this.progressTimer?.unref?.();

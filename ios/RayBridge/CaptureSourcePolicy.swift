@@ -11,15 +11,15 @@ enum CaptureSource: String, CaseIterable, Identifiable {
     // confirmations play through the iPhone regardless of the testing toggle.
     var requiresPhoneAudio: Bool { self == .phone }
     var startingStatus: String {
-        self == .glasses ? "Connecting glasses camera…" : "Starting iPhone camera…"
+        self == .glasses ? "안경 카메라 연결 중" : "아이폰 카메라 준비 중"
     }
     var connectedStatus: String {
-        self == .glasses ? "Glasses camera connected" : "iPhone camera connected"
+        self == .glasses ? "안경 카메라 연결됨" : "아이폰 카메라 연결됨"
     }
     var cameraReadyAnnouncement: String {
         self == .glasses
-            ? "Glasses camera connected. Listening."
-            : "iPhone camera connected. Point the back of the iPhone at what you want described. Listening."
+            ? "안경 카메라가 연결됐어요. 질문해 주세요."
+            : "아이폰 카메라가 켜졌어요. 후면 카메라로 대상을 비추고 질문해 주세요."
     }
 }
 
@@ -78,7 +78,7 @@ enum BackgroundSessionAction: Equatable {
 
 enum CaptureSourcePolicy {
     static let phoneFallbackOffer =
-        "You can continue without glasses, using the iPhone camera and speaker."
+        "안경 없이 아이폰 카메라와 스피커로 계속할 수 있어요."
 
     static func decision(preferred: CaptureSource, glasses: GlassesReadiness) -> StartDecision {
         // Someone who chose the iPhone in Setup never has to answer for glasses.
@@ -88,9 +88,9 @@ enum CaptureSourcePolicy {
 
     static func warning(for readiness: GlassesReadiness) -> GlassesWarning {
         GlassesWarning(
-            title: "Glasses aren’t connected",
+            title: "안경이 연결되지 않았어요",
             message: "\(reason(readiness)) \(phoneFallbackOffer)",
-            spokenNotice: "\(reason(readiness)) Say Start to continue without glasses, or say Cancel.",
+            spokenNotice: "\(reason(readiness)) 아이폰으로 계속하려면 Start, 돌아가려면 Cancel이라고 말해 주세요.",
             actions: readiness == .notRegistered
                 ? [.continueWithoutGlasses, .openSetup, .cancel]
                 : [.continueWithoutGlasses, .tryGlassesAnyway, .cancel])
@@ -100,7 +100,7 @@ enum CaptureSourcePolicy {
     // failure has already been spoken, so this warning stays silent.
     static func startupFailureWarning(_ message: String) -> GlassesWarning {
         GlassesWarning(
-            title: "Glasses couldn’t start",
+            title: "안경을 사용할 수 없어요",
             message: "\(message) \(phoneFallbackOffer)",
             spokenNotice: "",
             actions: [.continueWithoutGlasses, .tryGlassesAnyway, .cancel])
@@ -127,13 +127,13 @@ enum CaptureSourcePolicy {
 
     private static func reason(_ readiness: GlassesReadiness) -> String {
         switch readiness {
-        case .ready: return "Your glasses are ready."
-        case .discoveryUnavailable: return "RayBridge could not start glasses discovery."
-        case .notRegistered: return "Your glasses aren’t registered with Meta AI yet."
-        case .noGlassesFound: return "RayBridge can’t find your glasses."
-        case .notConnected: return "Your glasses aren’t connected."
-        case .connecting: return "Your glasses are still connecting."
-        case .needsUpdate: return "Your glasses or the Meta SDK need an update before the glasses camera can be used."
+        case .ready: return "안경이 준비됐어요."
+        case .discoveryUnavailable: return "안경을 검색할 수 없어요."
+        case .notRegistered: return "먼저 메타 AI 앱에 안경을 등록해 주세요."
+        case .noGlassesFound: return "안경을 찾을 수 없어요."
+        case .notConnected: return "안경이 연결되지 않았어요."
+        case .connecting: return "안경을 연결하고 있어요."
+        case .needsUpdate: return "안경이나 앱을 업데이트해 주세요."
         }
     }
 }

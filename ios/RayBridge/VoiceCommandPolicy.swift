@@ -15,19 +15,17 @@ enum VoiceCommand: String, CaseIterable, Hashable {
 // “Where is the bus stop?” and “How do I mute this?” available as questions.
 enum VoiceCommandPolicy {
     static let launchAnnouncement =
-        "RayBridge is stopped. Tap Start RayBridge, or say Start to begin. For a list of voice commands, say Commands."
+        "시작 버튼을 누르거나 Start라고 말해 주세요. 명령어를 들으려면 Commands라고 말하세요."
 
-    // Each phrase is spoken as its own utterance so command names do not run
-    // together. SpeechController adds a short pause after every phrase.
     static let helpAnnouncementPhrases = [
-        "Say Start when RayBridge is stopped.",
-        "Say Stop to end RayBridge.",
-        "Say Cancel to cancel the current question or answer.",
-        "Say Status to hear the current task status.",
-        "Say Repeat to hear the latest completed answer again.",
-        "Say Mute to ignore voice input.",
-        "When muted, say Unmute to resume.",
-        "Say Commands to hear this list again."
+        "시작하려면 Start.",
+        "종료하려면 Stop.",
+        "현재 요청을 취소하려면 Cancel.",
+        "진행 상황은 Status.",
+        "마지막 답변을 다시 들으려면 Repeat.",
+        "음성 입력을 끄려면 Mute.",
+        "다시 켜려면 Unmute.",
+        "명령어를 다시 들으려면 Commands."
     ]
 
     static let helpAnnouncement = helpAnnouncementPhrases.joined(separator: " ")

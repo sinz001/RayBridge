@@ -4,8 +4,15 @@ import Speech
 struct SpeechVoiceOption: Identifiable, Hashable {
     let id: String
     let name: String
+    let language: String
     let languageName: String
     let qualityName: String
+
+    var isKorean: Bool { language == "ko-KR" }
+    var previewText: String {
+        isKorean ? "안녕하세요. 레이브리지입니다. 선택한 목소리로 답변을 읽어 드릴게요."
+            : "Hello. I’m the RayBridge voice. I’ll read answers to you."
+    }
 
     var displayName: String { "\(name), \(qualityName), \(languageName)" }
 }
@@ -33,11 +40,10 @@ final class SpeechController: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlay
     private var listening = false
     private var generation = 0
     private var transcript = ""
+    private var noticeUtterance: AVSpeechUtterance?
     private var spokenUtterance: AVSpeechUtterance?
     private var confirmationUtterances: [AVSpeechUtterance] = []
     private var confirmationCompletion: (() -> Void)?
-    private var resumeSpeechAfterConfirmation = false
-    private var resumeAudioAfterConfirmation = false
     private var resumeHeartbeatAfterConfirmation = false
     private var answerPlayer: AVAudioPlayer?
     // Sentences of an answer that is still being written. Listening resumes only
@@ -50,6 +56,11 @@ final class SpeechController: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlay
     private var heartbeatPlayer: AVAudioPlayer?
     var allowPhoneAudio = false
     var voiceIdentifier: String?
+    var announcementVoiceIdentifier: String?
+    var hasAnswerOutput: Bool {
+        let readingAnswer = spokenUtterance != nil && spokenUtterance !== noticeUtterance
+        return readingAnswer || !streamedUtterances.isEmpty || !streamedAnswerComplete || answerPlayer != nil
+    }
     var isSpeaking: Bool {
         synthesizer.isSpeaking || answerPlayer?.isPlaying == true || confirmationSynthesizer.isSpeaking
     }
@@ -61,39 +72,41 @@ final class SpeechController: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlay
     }
 
     func availableVoiceOptions() -> [SpeechVoiceOption] {
-        Self.englishVoices.map { voice in
-            SpeechVoiceOption(
-                id: voice.identifier,
-                name: voice.name,
-                languageName: Locale.current.localizedString(forIdentifier: voice.language) ?? voice.language,
-                qualityName: Self.qualityName(voice.quality)
-            )
-        }
-    }
-
-    func preferredVoiceIdentifier(savedIdentifier: String?) -> String? {
-        let voices = Self.englishVoices
-        if let savedIdentifier, voices.contains(where: { $0.identifier == savedIdentifier }) {
-            return savedIdentifier
-        }
-        return voices.first(where: { $0.language == "en-US" })?.identifier
-            ?? AVSpeechSynthesisVoice(language: "en-US")?.identifier
-            ?? voices.first?.identifier
-    }
-
-    private static var englishVoices: [AVSpeechSynthesisVoice] {
         AVSpeechSynthesisVoice.speechVoices()
-            .filter { $0.language.hasPrefix("en-") }
+            .filter { $0.language == "ko-KR" || $0.language.hasPrefix("en-") }
             .sorted { left, right in
-                let leftUS = left.language == "en-US" ? 1 : 0
-                let rightUS = right.language == "en-US" ? 1 : 0
-                if leftUS != rightUS { return leftUS > rightUS }
-                let leftQuality = qualityRank(left.quality)
-                let rightQuality = qualityRank(right.quality)
+                let leftLanguage = Self.languageRank(left.language)
+                let rightLanguage = Self.languageRank(right.language)
+                if leftLanguage != rightLanguage { return leftLanguage > rightLanguage }
+                let leftQuality = Self.qualityRank(left.quality)
+                let rightQuality = Self.qualityRank(right.quality)
                 if leftQuality != rightQuality { return leftQuality > rightQuality }
                 if left.name != right.name { return left.name.localizedStandardCompare(right.name) == .orderedAscending }
                 return left.identifier < right.identifier
             }
+            .map { voice in
+                SpeechVoiceOption(
+                    id: voice.identifier,
+                    name: voice.name,
+                    language: voice.language,
+                    languageName: Locale.current.localizedString(forIdentifier: voice.language) ?? voice.language,
+                    qualityName: Self.qualityName(voice.quality)
+                )
+            }
+    }
+
+    private var selectedVoice: AVSpeechSynthesisVoice? {
+        voiceIdentifier.flatMap(AVSpeechSynthesisVoice.init(identifier:))
+            ?? AVSpeechSynthesisVoice(language: "ko-KR")
+            ?? AVSpeechSynthesisVoice(language: "en-US")
+    }
+
+    private static func languageRank(_ language: String) -> Int {
+        switch language {
+        case "ko-KR": return 2
+        case "en-US": return 1
+        default: return 0
+        }
     }
 
     private static func qualityRank(_ quality: AVSpeechSynthesisVoiceQuality) -> Int {
@@ -393,6 +406,8 @@ final class SpeechController: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlay
         preservingCurrentOutput: Bool,
         completion: @escaping () -> Void
     ) throws {
+        // Optional notices yield even between two streamed sentences.
+        if preservingCurrentOutput && hasAnswerOutput { completion(); return }
         cancelConfirmation()
         cancelCue()
         stopListening()
@@ -402,11 +417,6 @@ final class SpeechController: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlay
         }
 
         if preservingCurrentOutput {
-            resumeSpeechAfterConfirmation = synthesizer.isSpeaking && synthesizer.pauseSpeaking(at: .immediate)
-            if answerPlayer?.isPlaying == true {
-                answerPlayer?.pause()
-                resumeAudioAfterConfirmation = true
-            }
             if heartbeatPlayer?.isPlaying == true {
                 heartbeatPlayer?.pause()
                 resumeHeartbeatAfterConfirmation = true
@@ -420,8 +430,12 @@ final class SpeechController: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlay
             stopThinkingHeartbeat()
         }
 
-        let voice = voiceIdentifier.flatMap(AVSpeechSynthesisVoice.init(identifier:))
-            ?? AVSpeechSynthesisVoice(language: "en-US")
+        guard let voice = announcementVoiceIdentifier.flatMap(AVSpeechSynthesisVoice.init(identifier:)) else {
+            finishConfirmationPlayback()
+            completion()
+            return
+        }
+        let phrases = phrases.map(SystemAnnouncement.spokenText).filter { !$0.isEmpty }
         let utterances = phrases.enumerated().map { index, phrase in
             let utterance = AVSpeechUtterance(string: phrase)
             utterance.voice = voice
@@ -430,6 +444,7 @@ final class SpeechController: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlay
             return utterance
         }
         guard !utterances.isEmpty else {
+            finishConfirmationPlayback()
             completion()
             return
         }
@@ -474,8 +489,7 @@ final class SpeechController: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlay
         }
         streamedAnswerComplete = false
         let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = voiceIdentifier.flatMap(AVSpeechSynthesisVoice.init(identifier:))
-            ?? AVSpeechSynthesisVoice(language: "en-US")
+        utterance.voice = selectedVoice
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
         if !continuing, !commands.isEmpty { try startCommandListening(for: commands) }
         streamedUtterances.append(utterance)
@@ -494,7 +508,7 @@ final class SpeechController: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlay
         streamedAnswerComplete = true
         synthesizer.stopSpeaking(at: .immediate)
     }
-    func speak(_ text: String, listenForCommands commands: Set<VoiceCommand> = []) throws {
+    func speak(_ text: String, voice: AVSpeechSynthesisVoice? = nil, listenForCommands commands: Set<VoiceCommand> = []) throws {
         cancelCue()
         stopThinkingHeartbeat()
         clearStreamedAnswer()
@@ -510,10 +524,10 @@ final class SpeechController: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlay
             throw BridgeError.message("Glasses audio disconnected. The answer is available on screen.")
         }
         let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = voiceIdentifier.flatMap(AVSpeechSynthesisVoice.init(identifier:))
-            ?? AVSpeechSynthesisVoice(language: "en-US")
+        utterance.voice = voice ?? selectedVoice
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
         if !commands.isEmpty { try startCommandListening(for: commands) }
+        noticeUtterance = voice == nil ? nil : utterance
         spokenUtterance = utterance
         synthesizer.speak(utterance)
     }
@@ -584,11 +598,9 @@ final class SpeechController: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlay
         cuePlayer?.stop()
         cuePlayer = nil
     }
-    private func cancelConfirmation() {
+    func cancelConfirmation() {
         confirmationUtterances.removeAll()
         confirmationCompletion = nil
-        resumeSpeechAfterConfirmation = false
-        resumeAudioAfterConfirmation = false
         resumeHeartbeatAfterConfirmation = false
         confirmationSynthesizer.stopSpeaking(at: .immediate)
     }
@@ -598,16 +610,12 @@ final class SpeechController: NSObject, AVSpeechSynthesizerDelegate, AVAudioPlay
         guard confirmationUtterances.isEmpty else { return }
         let completion = confirmationCompletion
         confirmationCompletion = nil
-        let resumeSpeech = resumeSpeechAfterConfirmation
-        let resumeAudio = resumeAudioAfterConfirmation
-        let resumeHeartbeat = resumeHeartbeatAfterConfirmation
-        resumeSpeechAfterConfirmation = false
-        resumeAudioAfterConfirmation = false
-        resumeHeartbeatAfterConfirmation = false
-        if resumeSpeech { synthesizer.continueSpeaking() }
-        if resumeAudio { answerPlayer?.play() }
-        if resumeHeartbeat { heartbeatPlayer?.play() }
+        finishConfirmationPlayback()
         completion?()
+    }
+    private func finishConfirmationPlayback() {
+        if resumeHeartbeatAfterConfirmation { heartbeatPlayer?.play() }
+        resumeHeartbeatAfterConfirmation = false
     }
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor in

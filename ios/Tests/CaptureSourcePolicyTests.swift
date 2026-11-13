@@ -31,7 +31,7 @@ struct CaptureSourcePolicyTests {
             precondition(warning.actions.contains(.cancel), "The warning must be dismissible")
             precondition(warning.message.contains(CaptureSourcePolicy.phoneFallbackOffer),
                          "The warning must explain what continuing without glasses does")
-            precondition(!warning.spokenNotice.isEmpty && warning.spokenNotice.contains("Say Start"),
+            precondition(!warning.spokenNotice.isEmpty && warning.spokenNotice.contains("Start"),
                          "A blind user must hear the warning and how to accept it")
         }
     }
@@ -76,8 +76,8 @@ struct CaptureSourcePolicyTests {
     static func testSourceStrings() {
         precondition(!CaptureSource.glasses.requiresPhoneAudio, "Glasses keep their own audio route")
         precondition(CaptureSource.phone.requiresPhoneAudio, "Without glasses everything plays on the iPhone")
-        precondition(CaptureSource.phone.cameraReadyAnnouncement.contains("iPhone camera"))
-        precondition(CaptureSource.glasses.cameraReadyAnnouncement.contains("Glasses camera"))
+        precondition(CaptureSource.phone.cameraReadyAnnouncement.contains("아이폰 카메라"))
+        precondition(CaptureSource.glasses.cameraReadyAnnouncement.contains("안경 카메라"))
         precondition(CaptureSource(rawValue: "phone") == .phone, "The saved preference must survive a relaunch")
     }
 

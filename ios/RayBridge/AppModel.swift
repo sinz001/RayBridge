@@ -5,7 +5,8 @@ import OSLog
 import Darwin
 
 private let cameraImagePreferenceKey = "alwaysSendCameraImage"
-private let speechVoicePreferenceKey = "speechVoiceIdentifier"
+private let speechVoicePreferenceKey = "appleAnswerVoiceChoice"
+private let legacySpeechVoicePreferenceKey = "speechVoiceIdentifier"
 private let answerVoiceEnginePreferenceKey = "answerVoiceEngine"
 private let kokoroVoicePreferenceKey = "kokoroVoiceIdentifier"
 private let voiceCommandsPreferenceKey = "voiceCommandsEnabled"
@@ -88,7 +89,7 @@ enum RayBridgeDiagnostics {
 
 @MainActor
 final class AppModel: ObservableObject {
-    @Published var status = "Tap Start RayBridge to begin"
+    @Published var status = "시작 버튼을 눌러 주세요"
     @Published var cameraStatus = "Camera off"
     @Published var connected = false
     // The source this session is running on, and the one Start prefers.
@@ -134,13 +135,11 @@ final class AppModel: ObservableObject {
         didSet { UserDefaults.standard.set(kokoroVoiceIdentifier, forKey: kokoroVoicePreferenceKey) }
     }
     let kokoroVoices = KokoroVoiceOption.english
-    @Published var speechVoiceIdentifier = "" {
-        didSet {
-            speech.voiceIdentifier = speechVoiceIdentifier
-            UserDefaults.standard.set(speechVoiceIdentifier, forKey: speechVoicePreferenceKey)
-        }
-    }
+    @Published private(set) var speechVoiceChoice = ""
     @Published private(set) var speechVoices: [SpeechVoiceOption] = []
+    var selectedSpeechVoice: SpeechVoiceOption? {
+        speechVoices.first { $0.id == speechVoiceChoice } ?? speechVoices.first
+    }
     @Published var alwaysSendCameraImage: Bool = UserDefaults.standard.object(forKey: cameraImagePreferenceKey) as? Bool ?? true {
         didSet { UserDefaults.standard.set(alwaysSendCameraImage, forKey: cameraImagePreferenceKey) }
     }
@@ -182,6 +181,12 @@ final class AppModel: ObservableObject {
     private var pendingCameraAnnouncement = false
     private var pendingErrorAnnouncement: String?
     private var commandConfirmationPending = false
+    private var progressAnnouncementPlaying = false
+    private var lastProgressAnnouncement: String?
+    private var awaitingStatusReply = false
+    private var lastCompletedAnswer: String?
+    private enum DeferredVoiceRequest { case repeatAnswer(String), commands, status(String) }
+    private var afterAnswer: DeferredVoiceRequest?
     private var pendingAnswerMessage: [String: Any]?
     private var appIsActive = false
     private var launchAnnouncementPending = true
@@ -231,6 +236,7 @@ final class AppModel: ObservableObject {
             phoneCameraTransition?.cancel(); phoneCameraTransition = nil
             muted = false
             endAnswerStream()
+            progressAnnouncementPlaying = false; afterAnswer = nil; awaitingStatusReply = false
             commandConfirmationPending = false; pendingAnswerMessage = nil
             cancellationPending = false; cancellationToken = nil; cancellationTimeout?.cancel()
             pendingCameraAnnouncement = false; cameraActive = false; frame = nil
@@ -271,7 +277,8 @@ final class AppModel: ObservableObject {
                 self.fail(message); return
             }
             // fail() speaks this text, so the warning itself stays silent.
-            self.fail("\(message) \(CaptureSourcePolicy.phoneFallbackOffer)")
+            self.fail("\(message) \(CaptureSourcePolicy.phoneFallbackOffer)",
+                      spoken: "\(SystemAnnouncement.error(message)) \(CaptureSourcePolicy.phoneFallbackOffer)")
             self.present(CaptureSourcePolicy.startupFailureWarning(message), announce: false)
         }
         speech.voiceCommandsEnabled = voiceCommandsEnabled
@@ -280,7 +287,7 @@ final class AppModel: ObservableObject {
         speech.onTranscript = { [weak self] in self?.transcript = $0 }
         speech.onStartedListening = { [weak self] in
             guard let self, self.running, !self.muted else { return }
-            self.status = "Listening"
+            self.status = "질문을 기다리고 있어요"
         }
         speech.onError = { [weak self] message in
             guard let self else { return }
@@ -296,7 +303,14 @@ final class AppModel: ObservableObject {
             self.speech.allowPhoneAudio = self.usePhoneAudio
             if self.commandConfirmationPending { return }
             if let message = self.pendingErrorAnnouncement { self.speakError(message) }
-            else if self.pendingCameraAnnouncement { self.announceCameraIfReady() }
+            else if let request = self.afterAnswer {
+                self.afterAnswer = nil
+                switch request {
+                case .repeatAnswer(let text): self.replayAnswer(text)
+                case .commands: self.announceVoiceCommands()
+                case .status(let text): self.announceCoordinatorStatus(text)
+                }
+            } else if self.pendingCameraAnnouncement { self.announceCameraIfReady() }
             else if self.running { self.resumeListening() }
             else { self.refreshStandbyListening() }
         }
@@ -354,32 +368,62 @@ final class AppModel: ObservableObject {
     }
     func refreshSpeechVoices() {
         speechVoices = speech.availableVoiceOptions()
-        let saved = UserDefaults.standard.string(forKey: speechVoicePreferenceKey)
-        speechVoiceIdentifier = speech.preferredVoiceIdentifier(savedIdentifier: saved) ?? ""
-        speech.voiceIdentifier = speechVoiceIdentifier
+        speech.announcementVoiceIdentifier = speechVoices.first(where: { $0.isKorean })?.id
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: speechVoicePreferenceKey) == nil,
+           let legacy = defaults.string(forKey: legacySpeechVoicePreferenceKey),
+           let oldVoice = speechVoices.first(where: { $0.id == legacy }) {
+            // Older builds saved their automatic English default as if it had been picked.
+            let oldDefault = speechVoices.first { !$0.isKorean }
+            defaults.set(oldVoice.id == oldDefault?.id ? "" : legacy, forKey: speechVoicePreferenceKey)
+        }
+        let saved = defaults.string(forKey: speechVoicePreferenceKey)
+        speechVoiceChoice = speechVoices.first { $0.id == saved }?.id ?? ""
+        speech.voiceIdentifier = selectedSpeechVoice?.id
+    }
+    func selectSpeechVoice(_ choice: String) {
+        speechVoiceChoice = choice
+        UserDefaults.standard.set(choice, forKey: speechVoicePreferenceKey)
+        speech.voiceIdentifier = selectedSpeechVoice?.id
     }
     func previewSpeechVoice() {
-        guard !sessionActive else { return }
+        guard !sessionActive, let voice = selectedSpeechVoice else { return }
         error = nil
         speech.allowPhoneAudio = true
-        do { try speech.speak("Hello. I’m the RayBridge voice. I’ll read Codex answers to you.") }
+        do { try speech.speak(voice.previewText) }
         catch { fail("The voice preview could not play. \(error.localizedDescription)") }
         speech.allowPhoneAudio = usePhoneAudio
     }
-    func fail(_ message: String) {
+    private func announceForVoiceOver(_ text: String) {
+        guard UIAccessibility.isVoiceOverRunning else { return }
+        let announcement = NSAttributedString(string: SystemAnnouncement.spokenText(text),
+                                              attributes: [.accessibilitySpeechLanguage: "ko-KR"])
+        UIAccessibility.post(notification: .announcement, argument: announcement)
+    }
+    private func speakNotice(_ text: String, listenForCommands commands: Set<VoiceCommand> = []) throws {
+        guard !speech.hasAnswerOutput else { return }
+        guard let id = speech.announcementVoiceIdentifier,
+              let voice = AVSpeechSynthesisVoice(identifier: id) else {
+            if running { resumeListening() } else { refreshStandbyListening() }
+            return
+        }
+        try speech.speak(SystemAnnouncement.spokenText(text), voice: voice, listenForCommands: commands)
+    }
+    func fail(_ message: String, spoken: String? = nil) {
+        let notice = spoken ?? SystemAnnouncement.error(message)
         RayBridgeDiagnostics.event("An error was presented in the app")
         error = message; status = message
-        UIAccessibility.post(notification: .announcement, argument: message)
+        announceForVoiceOver(notice)
         guard appIsActive else {
-            pendingErrorAnnouncement = message
+            pendingErrorAnnouncement = notice
             return
         }
         guard !UIAccessibility.isVoiceOverRunning else {
             pendingErrorAnnouncement = nil
             return
         }
-        if sessionActive { pendingErrorAnnouncement = message }
-        else { speakError(message) }
+        if sessionActive { pendingErrorAnnouncement = notice }
+        else { speakError(notice) }
     }
     private func speakError(_ message: String) {
         guard appIsActive else {
@@ -392,7 +436,7 @@ final class AppModel: ObservableObject {
         }
         pendingErrorAnnouncement = nil
         speech.allowPhoneAudio = true
-        do { try speech.speak("Error. \(message)") }
+        do { try speakNotice(message) }
         catch {
             // The visual error and VoiceOver announcement remain available if
             // neither the glasses nor iPhone speaker can play the message.
@@ -408,7 +452,7 @@ final class AppModel: ObservableObject {
     }
     private func save(_ pairing: Pairing) throws {
         try pairing.save(); refreshPairings(); pairingText = ""; error = nil
-        status = "Mac paired. Tap Start RayBridge to begin."
+        status = "맥과 페어링했어요. 시작 버튼을 눌러 주세요."
     }
     func selectPairedMac(id: String) {
         guard !sessionActive, id != selectedPairingID else { return }
@@ -416,7 +460,7 @@ final class AppModel: ObservableObject {
             try Pairing.select(id: id)
             refreshPairings()
             error = nil
-            status = "Mac selected. Tap Start RayBridge to begin."
+            status = "맥을 선택했어요. 시작 버튼을 눌러 주세요."
         } catch { fail(error.localizedDescription) }
     }
     func saveWorkingFolder() {
@@ -426,9 +470,9 @@ final class AppModel: ObservableObject {
             refreshPairings()
             error = nil
             status = workingFolder.isEmpty
-                ? "Using the working folder configured on the selected Mac."
-                : "Working folder saved for the selected Mac."
-            UIAccessibility.post(notification: .announcement, argument: status)
+                ? "맥에 설정된 작업 폴더를 사용해요."
+                : "맥의 작업 폴더를 저장했어요."
+            announceForVoiceOver(status)
         } catch { fail(error.localizedDescription) }
     }
     private func refreshPairings() {
@@ -462,7 +506,7 @@ final class AppModel: ObservableObject {
             do {
                 try save(Pairing(link: url.absoluteString))
                 showingSetup = false
-                UIAccessibility.post(notification: .announcement, argument: status)
+                announceForVoiceOver(status)
             } catch {
                 pairingText = url.absoluteString
                 showingSetup = true
@@ -479,7 +523,7 @@ final class AppModel: ObservableObject {
             defer { registeringGlasses = false }
             do {
                 try await camera.register()
-                if !registrationStatus.isEmpty { status = "Glasses registered. Tap Start RayBridge to begin." }
+                if !registrationStatus.isEmpty { status = "안경을 등록했어요. 시작 버튼을 눌러 주세요." }
             } catch { fail(error.localizedDescription) }
         }
     }
@@ -490,7 +534,7 @@ final class AppModel: ObservableObject {
             // During the announcement, recognition accepts only voice controls so the
             // ready cue cannot become the user's first question.
             speech.allowPhoneAudio = usePhoneAudio
-            try speech.speak(captureSource.cameraReadyAnnouncement, listenForCommands: currentResponseCommands)
+            try speakNotice(captureSource.cameraReadyAnnouncement, listenForCommands: currentResponseCommands)
         } catch {
             RayBridgeDiagnostics.event("Camera connected, but audio confirmation could not play")
             self.error = captureSource == .glasses
@@ -507,15 +551,15 @@ final class AppModel: ObservableObject {
             if error == nil { status = idleStatus }
             if let message = pendingErrorAnnouncement { speakError(message) }
             else { refreshStandbyListening() }
-        case .connecting: status = "Connecting to your Mac…"
-        case .authorizing: status = "Checking microphone and speech permissions…"
+        case .connecting: status = "맥에 연결하는 중"
+        case .authorizing: status = "마이크와 음성 인식 권한 확인 중"
         case .startingCamera: status = captureSource.startingStatus
-        case .startingAudio: status = "Preparing microphone…"
+        case .startingAudio: status = "마이크 준비 중"
         case .running:
-            status = "Listening"
+            status = "질문을 기다리고 있어요"
             RayBridgeDiagnostics.event("RayBridge session ready with camera and microphone")
             announceCameraIfReady()
-        case .stopping: status = "Stopping RayBridge…"
+        case .stopping: status = "종료하는 중"
         }
     }
     // The stage a failure happened in decides whether dropping the glasses helps.
@@ -563,7 +607,7 @@ final class AppModel: ObservableObject {
                 guard current == activity, sessionActive, captureSource == .phone,
                       phoneCameraPausedForBackground else { return }
                 cameraStatus = "iPhone camera paused. Listening without camera."
-                if !busy, !speech.isSpeaking { status = "Listening without camera" }
+                if !busy, !speech.isSpeaking { status = "카메라 없이 질문을 듣고 있어요" }
             }
         case .preservePermissionHandoff:
             // Opening Meta AI for camera permission is still part of startup.
@@ -613,15 +657,15 @@ final class AppModel: ObservableObject {
         launchAnnouncementPending = false
         let message = voiceCommandsEnabled && handsFreeStandbyEnabled
             ? VoiceCommandPolicy.launchAnnouncement
-            : "RayBridge is stopped. Tap Start RayBridge to begin."
-        UIAccessibility.post(notification: .announcement, argument: message)
+            : "시작 버튼을 눌러 주세요."
+        announceForVoiceOver(message)
         guard !UIAccessibility.isVoiceOverRunning else {
             refreshStandbyListening()
             return
         }
         // The startup guidance must be audible before a glasses route exists.
         speech.allowPhoneAudio = true
-        do { try speech.speak(message) }
+        do { try speakNotice(message) }
         catch { refreshStandbyListening() }
     }
     func start() {
@@ -643,9 +687,9 @@ final class AppModel: ObservableObject {
         guard !sessionActive else { return }
         RayBridgeDiagnostics.event("Start RayBridge button pressed")
         launchAnnouncementPending = false
-        status = "Starting RayBridge…"
-        let announcement = "Starting RayBridge."
-        UIAccessibility.post(notification: .announcement, argument: announcement)
+        status = "시작하는 중"
+        let announcement = "레이브릿지를 시작할게요."
+        announceForVoiceOver(announcement)
         guard !UIAccessibility.isVoiceOverRunning else {
             start()
             return
@@ -682,14 +726,15 @@ final class AppModel: ObservableObject {
         status = warning.message
         // A startup failure has already been announced and spoken by fail().
         guard announce else { return }
-        UIAccessibility.post(notification: .announcement, argument: warning.message)
+        announceForVoiceOver(warning.message)
         guard appIsActive, !UIAccessibility.isVoiceOverRunning else {
             // VoiceOver reads the alert; a second voice would talk over it.
             refreshStandbyListening()
             return
         }
         speech.allowPhoneAudio = true
-        do { try speech.speak(warning.spokenNotice) }
+        let notice = voiceCommandsEnabled && handsFreeStandbyEnabled ? warning.spokenNotice : warning.message
+        do { try speakNotice(notice) }
         catch {
             speech.allowPhoneAudio = usePhoneAudio
             refreshStandbyListening()
@@ -700,6 +745,7 @@ final class AppModel: ObservableObject {
         if source == .glasses, !camera.isRegistered {
             showingSetup = true; fail("Open Setup and register your glasses with Meta AI first."); return
         }
+        lastCompletedAnswer = nil
         captureSource = source
         phoneCameraPausedForBackground = false
         phoneCameraTransition?.cancel(); phoneCameraTransition = nil
@@ -725,9 +771,9 @@ final class AppModel: ObservableObject {
     func stopFromButton() {
         guard sessionActive else { return }
         RayBridgeDiagnostics.event("Stop RayBridge button pressed")
-        status = "Stopping RayBridge…"
-        let announcement = "Stopping RayBridge."
-        UIAccessibility.post(notification: .announcement, argument: announcement)
+        status = "종료하는 중"
+        let announcement = "레이브릿지를 종료할게요."
+        announceForVoiceOver(announcement)
         guard !UIAccessibility.isVoiceOverRunning else {
             stop()
             return
@@ -758,36 +804,36 @@ final class AppModel: ObservableObject {
         }
     }
     private var idleStatus: String {
-        glassesWarning?.message ?? "Stopped. Tap Start RayBridge to begin."
+        glassesWarning?.message ?? "시작 버튼을 눌러 주세요."
     }
     private var standbyStatus: String {
-        guard glassesWarning == nil else { return "Glasses aren’t connected. Say Start to continue without glasses, Cancel to dismiss, or Commands for help." }
-        return "Stopped. Say Start, say Commands for help, or tap Start RayBridge."
+        guard glassesWarning == nil else { return "안경이 연결되지 않았어요. 아이폰으로 계속하려면 Start, 돌아가려면 Cancel이라고 말해 주세요." }
+        return "시작하려면 Start, 명령어를 들으려면 Commands라고 말해 주세요."
     }
     private func handleVoiceCommand(_ command: VoiceCommand) {
         switch command {
         case .start:
             guard !sessionActive else { return }
             if glassesWarning != nil {
-                status = "Starting without glasses…"
-                confirmVoiceCommand("Starting without glasses.", preservingCurrentOutput: false) { [weak self] in
+                status = "아이폰으로 시작하는 중"
+                confirmVoiceCommand("아이폰으로 시작할게요.", preservingCurrentOutput: false) { [weak self] in
                     self?.continueWithoutGlasses()
                 }
                 return
             }
-            status = "Starting RayBridge…"
-            confirmVoiceCommand("Starting.", preservingCurrentOutput: false) { [weak self] in
+            status = "시작하는 중"
+            confirmVoiceCommand("시작할게요.", preservingCurrentOutput: false) { [weak self] in
                 self?.start()
             }
         case .stop:
             guard sessionActive else { return }
-            status = "Stopping RayBridge…"
-            confirmVoiceCommand("Stopping.", preservingCurrentOutput: false) { [weak self] in
+            status = "종료하는 중"
+            confirmVoiceCommand("종료할게요.", preservingCurrentOutput: false) { [weak self] in
                 self?.stop()
             }
         case .cancel:
             if !sessionActive, glassesWarning != nil {
-                confirmVoiceCommand("Cancelled.", preservingCurrentOutput: false) { [weak self] in
+                confirmVoiceCommand("취소했어요.", preservingCurrentOutput: false) { [weak self] in
                     self?.dismissGlassesWarning()
                 }
                 return
@@ -798,6 +844,7 @@ final class AppModel: ObservableObject {
         case .unmute:
             unmuteVoiceInput()
         case .status:
+            awaitingStatusReply = true
             requestCoordinatorControl("status")
         case .repeat:
             requestCoordinatorControl("repeat")
@@ -815,7 +862,15 @@ final class AppModel: ObservableObject {
             }
         }
     }
+    private func deferVoiceRequest(_ request: DeferredVoiceRequest) {
+        afterAnswer = request
+        // Recognizing a standalone command ends its recognition task. Keep Stop
+        // and Cancel available while the requested speech waits for the answer.
+        do { try speech.startCommandListening(for: currentResponseCommands) }
+        catch { stop(); fail(error.localizedDescription) }
+    }
     private func announceVoiceCommands() {
+        if busy || speech.hasAnswerOutput { deferVoiceRequest(.commands); return }
         let previousStatus = status
         let preservingOutput = running && (busy || speech.isSpeaking)
         confirmVoiceCommand(
@@ -840,20 +895,24 @@ final class AppModel: ObservableObject {
     private func confirmVoiceCommand(
         _ message: String,
         preservingCurrentOutput: Bool,
+        isProgress: Bool = false,
         completion: @escaping () -> Void
     ) {
         confirmVoiceCommand(
             [message],
             pauseBetweenPhrases: 0,
             preservingCurrentOutput: preservingCurrentOutput,
+            isProgress: isProgress,
             completion: completion)
     }
     private func confirmVoiceCommand(
         _ phrases: [String],
         pauseBetweenPhrases: TimeInterval,
         preservingCurrentOutput: Bool,
+        isProgress: Bool = false,
         completion: @escaping () -> Void
     ) {
+        progressAnnouncementPlaying = isProgress
         commandConfirmationPending = true
         speech.allowPhoneAudio = sessionActive ? usePhoneAudio : true
         let finish = { [weak self] in
@@ -881,8 +940,8 @@ final class AppModel: ObservableObject {
         guard running, !muted else { return }
         RayBridgeDiagnostics.event("Voice Mute requested")
         muted = true
-        status = "Muting voice input…"
-        confirmVoiceCommand("Muted.", preservingCurrentOutput: true) { [weak self] in
+        status = "음성 입력을 끄는 중"
+        confirmVoiceCommand("음성 입력을 껐어요.", preservingCurrentOutput: true) { [weak self] in
             self?.listenForUnmute()
         }
     }
@@ -890,13 +949,13 @@ final class AppModel: ObservableObject {
         guard running, muted else { return }
         RayBridgeDiagnostics.event("Voice Unmute requested")
         muted = false
-        status = "Unmuting voice input…"
-        confirmVoiceCommand("Unmuted.", preservingCurrentOutput: true) { [weak self] in
+        status = "음성 입력을 켜는 중"
+        confirmVoiceCommand("음성 입력을 켰어요.", preservingCurrentOutput: true) { [weak self] in
             guard let self, self.running else { return }
             if self.busy || self.speech.isSpeaking {
                 do { try self.speech.startCommandListening(for: self.activeResponseCommands) }
                 catch { self.stop(); self.fail(error.localizedDescription); return }
-                self.status = self.busy ? "Thinking. Voice input unmuted." : "Speaking. Voice input unmuted."
+                self.status = self.busy ? "음성 입력을 켰어요. 답변을 준비하고 있어요" : "음성 입력을 켰어요. 답변을 읽고 있어요"
             } else {
                 self.resumeListening()
             }
@@ -906,15 +965,16 @@ final class AppModel: ObservableObject {
         guard running, connected, muted else { return }
         do { try speech.startCommandListening(for: currentResponseCommands) }
         catch { stop(); fail(error.localizedDescription); return }
-        if busy { status = "Muted while Codex is thinking. Say Unmute." }
-        else if speech.isSpeaking { status = "Muted while the answer is speaking. Say Unmute." }
-        else { status = "Muted. Say Unmute to ask another question." }
+        if busy { status = "음성 입력을 끄고 답변을 기다리고 있어요" }
+        else if speech.isSpeaking { status = "음성 입력을 끄고 답변을 읽고 있어요" }
+        else { status = "음성 입력을 켜려면 Unmute라고 말해 주세요." }
     }
     func ask(_ text: String) {
         guard running, connected, !muted, !busy, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         RayBridgeDiagnostics.event("Question submitted to Mac")
+        lastProgressAnnouncement = nil
         turnClock = ContinuousClock.now; spokenAnswerPrefix = ""; answerStreamStopped = false
-        speech.stop(); busy = true; transcript = text; error = nil; status = "Asking ChatGPT…"
+        speech.stop(); busy = true; transcript = text; error = nil; status = "질문을 보내는 중"
         speech.allowPhoneAudio = usePhoneAudio
         do { try speech.startCommandListening(for: currentResponseCommands) }
         catch { stop(); fail(error.localizedDescription); return }
@@ -970,11 +1030,13 @@ final class AppModel: ObservableObject {
         let needsMacCancellation = busy || cancellationPending
         let alreadyCancelling = cancellationPending
         endAnswerStream()
+        afterAnswer = nil
+        progressAnnouncementPlaying = false
         busy = false; cancellationPending = needsMacCancellation; pendingCameraAnnouncement = false
         transcript = ""; error = nil
         if verballyConfirm {
-            status = "Cancelling current turn…"
-            confirmVoiceCommand("Cancelling.", preservingCurrentOutput: false) { [weak self] in
+            status = "현재 요청을 취소하는 중"
+            confirmVoiceCommand("취소할게요.", preservingCurrentOutput: false) { [weak self] in
                 self?.resumeListening()
             }
         } else {
@@ -1009,9 +1071,33 @@ final class AppModel: ObservableObject {
             listenForUnmute()
             return
         }
-        status = "Preparing to listen…"
+        status = "질문을 들을 준비 중"
         do { try speech.startListeningWithCue() }
         catch { stop(); fail(error.localizedDescription) }
+    }
+    private func announceCoordinatorStatus(_ notice: String) {
+        confirmVoiceCommand(notice, preservingCurrentOutput: true, isProgress: true) { [weak self] in
+            self?.progressAnnouncementPlaying = false
+            guard let self, self.running else { return }
+            if self.muted {
+                self.listenForUnmute()
+            } else if self.busy || self.speech.isSpeaking {
+                do { try self.speech.startCommandListening(for: self.currentResponseCommands) }
+                catch { self.stop(); self.fail(error.localizedDescription); return }
+            } else {
+                self.resumeListening()
+            }
+        }
+    }
+    private func replayAnswer(_ text: String) {
+        do { try speech.speak(text, listenForCommands: currentResponseCommands) }
+        catch { stop(); fail(error.localizedDescription) }
+    }
+    private func yieldProgressToAnswer() {
+        guard progressAnnouncementPlaying else { return }
+        speech.cancelConfirmation()
+        progressAnnouncementPlaying = false
+        commandConfirmationPending = false
     }
     private func receive(_ message: [String: Any]) {
         switch message["type"] as? String {
@@ -1022,14 +1108,15 @@ final class AppModel: ObservableObject {
         case "thinking":
             guard running, busy, !cancellationPending else { return }
             markTurn("Mac accepted the question")
-            if muted { status = "Muted while Codex is thinking. Say Unmute." }
-            else { status = message["hasImage"] as? Bool == true ? "Thinking with a current camera image…" : "Thinking. No current camera image." }
+            if muted { status = "음성 입력을 끄고 답변을 기다리고 있어요" }
+            else { status = message["hasImage"] as? Bool == true ? "카메라 영상을 참고해 답변을 준비하고 있어요" : "카메라 영상 없이 답변을 준비하고 있어요" }
         // A finished sentence of an answer the Mac is still writing.
         case "answer.partial":
             guard running, busy, !cancellationPending, !answerStreamStopped,
                   let text = message["text"] as? String, !text.isEmpty else { return }
             // A spoken command confirmation owns the audio route, so the rest of
             // this answer waits and is spoken once it is complete.
+            yieldProgressToAnswer()
             guard !commandConfirmationPending else { answerStreamStopped = true; return }
             if spokenAnswerPrefix.isEmpty { markTurn("First answer sentence received") }
             do {
@@ -1037,7 +1124,7 @@ final class AppModel: ObservableObject {
                 try speech.speakStreamedChunk(text, listenForCommands: currentResponseCommands)
                 spokenAnswerPrefix += text
                 answer = spokenAnswerPrefix
-                status = muted ? "Muted while the answer is speaking. Say Unmute." : "Speaking"
+                status = muted ? "음성 입력을 끄고 답변을 읽고 있어요" : "답변을 읽고 있어요"
             } catch { stop(); fail(error.localizedDescription) }
         // The assistant replaced the text it was writing, so what was spoken was
         // not the answer after all.
@@ -1045,16 +1132,18 @@ final class AppModel: ObservableObject {
             guard running, busy, !cancellationPending, !spokenAnswerPrefix.isEmpty else { return }
             speech.cancelStreamedAnswer()
             spokenAnswerPrefix = ""; answer = ""
-            status = muted ? "Muted while Codex is thinking. Say Unmute." : "Still thinking…"
+            status = muted ? "음성 입력을 끄고 답변을 기다리고 있어요" : "답변을 준비하고 있어요"
         case "answer":
             guard running, busy, !cancellationPending, let text = message["text"] as? String else { return }
+            yieldProgressToAnswer()
             if commandConfirmationPending {
                 pendingAnswerMessage = message
                 return
             }
             RayBridgeDiagnostics.event("Answer received from Mac")
             markTurn("Complete answer received")
-            busy = false; answer = text; status = "Answer ready"
+            lastCompletedAnswer = text
+            busy = false; answer = text; status = "답변이 도착했어요"
             do {
                 speech.allowPhoneAudio = usePhoneAudio
                 if let audio = message["audio"] as? [String: Any],
@@ -1062,20 +1151,20 @@ final class AppModel: ObservableObject {
                    let encoded = audio["data"] as? String,
                    let data = Data(base64Encoded: encoded) {
                     try speech.speakAudio(data, listenForCommands: currentResponseCommands)
-                    status = muted ? "Muted while the answer is speaking. Say Unmute." : "Speaking with Kokoro"
+                    status = muted ? "음성 입력을 끄고 답변을 읽고 있어요" : "코코로 음성으로 답변을 읽고 있어요"
                 } else {
                     switch AnswerStreamPolicy.speech(completed: text, alreadySpoken: spokenAnswerPrefix) {
                     case .whole(let whole):
                         try speech.speak(whole, listenForCommands: currentResponseCommands)
-                        status = muted ? "Muted while the answer is speaking. Say Unmute."
-                            : message["ttsFallback"] == nil ? "Speaking" : "Speaking with Apple voice. Kokoro is unavailable on the Mac."
+                        status = muted ? "음성 입력을 끄고 답변을 읽고 있어요"
+                            : message["ttsFallback"] == nil ? "답변을 읽고 있어요" : "맥에서 코코로를 사용할 수 없어 아이폰 음성으로 읽고 있어요"
                     case .remainder(let remainder):
                         try speech.speakStreamedChunk(remainder, listenForCommands: currentResponseCommands)
                         speech.finishStreamedAnswer()
-                        status = muted ? "Muted while the answer is speaking. Say Unmute." : "Speaking"
+                        status = muted ? "음성 입력을 끄고 답변을 읽고 있어요" : "답변을 읽고 있어요"
                     case .nothing:
                         speech.finishStreamedAnswer()
-                        status = muted ? "Muted while the answer is speaking. Say Unmute." : "Speaking"
+                        status = muted ? "음성 입력을 끄고 답변을 읽고 있어요" : "답변을 읽고 있어요"
                     }
                 }
                 endAnswerStream()
@@ -1085,19 +1174,29 @@ final class AppModel: ObservableObject {
             cancellationPending = false; cancellationToken = nil; cancellationTimeout?.cancel()
         case "coordinator.speech":
             guard running, let text = message["text"] as? String, !text.isEmpty else { return }
-            let previousStatus = status
-            confirmVoiceCommand(text, preservingCurrentOutput: busy || speech.isSpeaking) { [weak self] in
-                guard let self, self.running else { return }
-                if self.muted {
-                    self.listenForUnmute()
-                } else if self.busy || self.speech.isSpeaking {
-                    do { try self.speech.startCommandListening(for: self.currentResponseCommands) }
-                    catch { self.stop(); self.fail(error.localizedDescription); return }
-                    self.status = previousStatus
-                } else {
-                    self.resumeListening()
-                }
+            let kind = message["kind"] as? String
+            // Older bridges sent repeats and progress on the same untagged channel.
+            if kind == "repeatAnswer" || (kind == nil && text == lastCompletedAnswer) {
+                if speech.hasAnswerOutput || busy { deferVoiceRequest(.repeatAnswer(text)) }
+                else { replayAnswer(text) }
+                return
             }
+            let requestedStatus = kind == "status" || (kind == nil && awaitingStatusReply)
+            if requestedStatus { awaitingStatusReply = false }
+            guard !cancellationPending else { return }
+            let notice = SystemAnnouncement.coordinator(text)
+            guard !notice.isEmpty else { return }
+            if speech.hasAnswerOutput {
+                if requestedStatus { deferVoiceRequest(.status(notice)) }
+                return
+            }
+            guard !commandConfirmationPending else { return }
+            if kind == "progress" || (kind == nil && busy && !requestedStatus) {
+                guard lastProgressAnnouncement != notice else { return }
+                lastProgressAnnouncement = notice
+            }
+            if kind == "progress" { status = notice }
+            announceCoordinatorStatus(notice)
         case "error":
             // An old turn can fail while the cancellation is in flight.
             // The timeout reconnects if the Mac cannot acknowledge cancellation.

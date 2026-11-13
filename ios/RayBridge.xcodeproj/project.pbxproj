@@ -12,6 +12,7 @@
 		2B66AB01A1C45881B21F5101 /* CameraImagePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B66AB01A1C45881B21F5102 /* CameraImagePolicy.swift */; };
 		2B66AB01A1C45881B21F5111 /* AnswerStreamPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B66AB01A1C45881B21F5112 /* AnswerStreamPolicy.swift */; };
 		3C77BC02B2D56992C3206201 /* VoiceCommandPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C77BC02B2D56992C3206202 /* VoiceCommandPolicy.swift */; };
+		C531CA018F1242A9A1000011 /* SystemAnnouncement.swift in Sources */ = {isa = PBXBuildFile; fileRef = C531CA018F1242A9A1000012 /* SystemAnnouncement.swift */; };
 		7A12CE03C3E67AA3D4317301 /* CaptureSourcePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A12CE03C3E67AA3D4317302 /* CaptureSourcePolicy.swift */; };
 		5E99DE04D4F78BB4E5428401 /* PhoneCamera.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E99DE04D4F78BB4E5428402 /* PhoneCamera.swift */; };
 		4D88CD03C3E67AA3D4317301 /* PairingHostPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D88CD03C3E67AA3D4317302 /* PairingHostPolicy.swift */; };
@@ -33,6 +34,7 @@
 		2B66AB01A1C45881B21F5102 /* CameraImagePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraImagePolicy.swift; sourceTree = "<group>"; };
 		2B66AB01A1C45881B21F5112 /* AnswerStreamPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnswerStreamPolicy.swift; sourceTree = "<group>"; };
 		3C77BC02B2D56992C3206202 /* VoiceCommandPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceCommandPolicy.swift; sourceTree = "<group>"; };
+		C531CA018F1242A9A1000012 /* SystemAnnouncement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAnnouncement.swift; sourceTree = "<group>"; };
 		7A12CE03C3E67AA3D4317302 /* CaptureSourcePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureSourcePolicy.swift; sourceTree = "<group>"; };
 		5E99DE04D4F78BB4E5428402 /* PhoneCamera.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneCamera.swift; sourceTree = "<group>"; };
 		4D88CD03C3E67AA3D4317302 /* PairingHostPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingHostPolicy.swift; sourceTree = "<group>"; };
@@ -91,6 +93,7 @@
 				2B66AB01A1C45881B21F5102 /* CameraImagePolicy.swift */,
 				2B66AB01A1C45881B21F5112 /* AnswerStreamPolicy.swift */,
 				3C77BC02B2D56992C3206202 /* VoiceCommandPolicy.swift */,
+				C531CA018F1242A9A1000012 /* SystemAnnouncement.swift */,
 				7A12CE03C3E67AA3D4317302 /* CaptureSourcePolicy.swift */,
 				5E99DE04D4F78BB4E5428402 /* PhoneCamera.swift */,
 				4D88CD03C3E67AA3D4317302 /* PairingHostPolicy.swift */,
@@ -185,6 +188,7 @@
 				2B66AB01A1C45881B21F5101 /* CameraImagePolicy.swift in Sources */,
 				2B66AB01A1C45881B21F5111 /* AnswerStreamPolicy.swift in Sources */,
 				3C77BC02B2D56992C3206201 /* VoiceCommandPolicy.swift in Sources */,
+				C531CA018F1242A9A1000011 /* SystemAnnouncement.swift in Sources */,
 				7A12CE03C3E67AA3D4317301 /* CaptureSourcePolicy.swift in Sources */,
 				5E99DE04D4F78BB4E5428401 /* PhoneCamera.swift in Sources */,
 				4D88CD03C3E67AA3D4317301 /* PairingHostPolicy.swift in Sources */,

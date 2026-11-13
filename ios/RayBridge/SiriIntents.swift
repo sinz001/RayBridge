@@ -45,8 +45,8 @@ struct StartRayBridgeIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let requested = RayBridgeIntentCoordinator.shared.requestStart()
         return .result(dialog: requested
-            ? "Starting RayBridge."
-            : "RayBridge is already running.")
+            ? "레이브릿지를 시작할게요."
+            : "레이브릿지가 이미 실행 중이에요.")
     }
 }
 

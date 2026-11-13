@@ -83,7 +83,7 @@ test('long tasks stay active and speak acknowledgements and useful progress', as
   t.after(() => session.close());
   await session.receive({ type: 'ask', text: 'Do a long task' });
   assert.deepEqual(output.find(event => event.type === 'coordinator.speech'), {
-    type: 'coordinator.speech', text: 'Got it. I’ll start now and keep you updated.'
+    type: 'coordinator.speech', kind: 'progress', text: 'Got it. I’ll start now and keep you updated.'
   });
   codex.emit('notification', { method: 'item/completed', params: {
     threadId: 'thread-1', turnId: 'turn-1',
@@ -91,11 +91,11 @@ test('long tasks stay active and speak acknowledgements and useful progress', as
   } });
   tick();
   assert.deepEqual(output.at(-1), {
-    type: 'coordinator.speech', text: 'Checked the files. I am running the focused tests now.'
+    type: 'coordinator.speech', kind: 'progress', text: 'Checked the files. I am running the focused tests now.'
   });
   assert.equal(codex.calls.some(call => call[0] === 'turn/interrupt'), false);
   tick();
-  assert.deepEqual(output.at(-1), { type: 'coordinator.speech', text: 'I’m still working on your request.' });
+  assert.deepEqual(output.at(-1), { type: 'coordinator.speech', kind: 'progress', text: 'I’m still working on your request.' });
   codex.emit('notification', { method: 'item/completed', params: {
     threadId: 'thread-1', turnId: 'turn-1',
     item: { type: 'agentMessage', phase: 'final_answer', text: 'The long task is complete.' }
@@ -122,7 +122,7 @@ test('Repeat speaks the latest completed answer and handles an empty history', a
   codex.emit('notification', { method: 'turn/completed', params: {
     threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } } });
   await session.receive({ type: 'repeat' });
-  assert.deepEqual(output.at(-1), { type: 'coordinator.speech', text: 'The saved answer.' });
+  assert.deepEqual(output.at(-1), { type: 'coordinator.speech', kind: 'repeatAnswer', text: 'The saved answer.' });
 });
 test('Kokoro audio is attached to the final answer', async t => {
   const tts = { synthesize: async (text, voice) => {
